@@ -19,6 +19,7 @@ from utilities.auth import (
 )
 # from services.crew_executor import CrewExecutor
 from api.parse_pdf import router as parse_pdf_router
+from api.chat_box import router as chat_box_router
 
 # Create database tables (only if they don't exist)
 Base.metadata.create_all(bind=engine)
@@ -39,6 +40,7 @@ app.add_middleware(
 )
 
 app.include_router(parse_pdf_router)
+app.include_router(chat_box_router)
 
 @app.get("/")
 async def root():
