@@ -120,6 +120,7 @@
           "phase": 1,
           "title": "Market Analysis and Problem Identification",
           "duration": "30 minutes",
+          "goal": "Complete a comprehensive stakeholder analysis and value chain mapping to identify key business challenges.",
           "activities": [
             "Teams analyze the current business model of KasKazi Network",
             "Identify key stakeholders and their interests",
@@ -136,6 +137,7 @@
           "phase": 2,
           "title": "Strategic Challenge Deep Dive",
           "duration": "45 minutes",
+          "goal": "Analyze root causes of seasonal contract issues and assess competitive landscape.",
           "activities": [
             "Analyze the root causes of the seasonal contract challenge",
             "Evaluate the impact on end customers and market development",
@@ -152,6 +154,7 @@
           "phase": 3,
           "title": "Strategic Options Development",
           "duration": "45 minutes",
+          "goal": "Develop strategic options and evaluate own-brand product opportunities.",
           "activities": [
             "Brainstorm alternative business models",
             "Evaluate the own-brand product strategy",
@@ -168,6 +171,7 @@
           "phase": 4,
           "title": "Implementation Planning and Presentation",
           "duration": "60 minutes",
+          "goal": "Create implementation roadmap with financial projections and risk mitigation.",
           "activities": [
             "Develop implementation roadmap for chosen strategy",
             "Create financial projections and resource requirements",
