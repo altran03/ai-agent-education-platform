@@ -323,7 +323,7 @@ async def start_simulation(
                     "objectives": [scene.user_goal] if scene.user_goal else ["Complete the scene interaction"],
                     "image_url": scene.image_url,
                     "agent_ids": [p.name.lower().replace(" ", "_") for p in all_personas],  # All personas available
-                    "max_turns": 20,
+                    "max_turns": scene.timeout_turns if scene.timeout_turns is not None else 15,
                     "success_criteria": f"User achieves: {scene.user_goal or 'scene completion'}"
                 }
                 for scene in all_scenes
@@ -373,21 +373,28 @@ async def start_simulation(
     db.commit()
     
     # Prepare response data
+    # Ensure learning_objectives is always a list
+    learning_objectives = scenario.learning_objectives
+    if isinstance(learning_objectives, str):
+        learning_objectives = [learning_objectives]
+    elif learning_objectives is None:
+        learning_objectives = []
     scenario_data = SimulationScenarioResponse(
         id=scenario.id,
         title=scenario.title,
         description=scenario.description,
         challenge=scenario.challenge,
         industry=scenario.industry,
-        learning_objectives=scenario.learning_objectives or [],
+        learning_objectives=learning_objectives,
         student_role=scenario.student_role
     )
     
     # Get all personas for the scenario (not just scene-specific ones)
+    main_character_name = (scenario.student_role or '').strip().lower()
     scene_personas = db.query(ScenarioPersona).filter(
         ScenarioPersona.scenario_id == scenario.id
     ).all()
-    
+
     personas_data = [
         ScenarioPersonaResponse(
             id=persona.id,
@@ -396,11 +403,15 @@ async def start_simulation(
             role=persona.role,
             background=persona.background,
             correlation=persona.correlation,
-            primary_goals=persona.primary_goals or [],
+            primary_goals=(
+                [persona.primary_goals] if isinstance(persona.primary_goals, str) and persona.primary_goals else
+                persona.primary_goals if isinstance(persona.primary_goals, list) else []
+            ),
             personality_traits=persona.personality_traits or {},
             created_at=persona.created_at,
             updated_at=persona.updated_at
         ) for persona in scene_personas
+        if persona.name.strip().lower() != main_character_name
     ]
     
     scene_data = ScenarioSceneResponse(
@@ -413,6 +424,8 @@ async def start_simulation(
         estimated_duration=current_scene.estimated_duration,
         image_url=current_scene.image_url,
         image_prompt=current_scene.image_prompt,
+        timeout_turns=current_scene.timeout_turns,  # Ensure this is included
+        success_metric=current_scene.success_metric,  # Ensure this is included
         created_at=current_scene.created_at,
         updated_at=current_scene.updated_at,
         personas=personas_data
@@ -674,9 +687,10 @@ async def validate_scene_goal(
     max_attempts = scene.max_attempts or 5
     
     # AI evaluation prompt
+    goal_for_validation = scene.success_metric or scene.user_goal
     evaluation_prompt = f"""Evaluate whether the user has achieved the scene goal based on the conversation.
 
-SCENE GOAL: {scene.user_goal}
+SCENE GOAL: {goal_for_validation}
 
 SCENE DESCRIPTION: {scene.description}
 
@@ -840,6 +854,8 @@ async def progress_to_next_scene(
             estimated_duration=next_scene.estimated_duration,
             image_url=next_scene.image_url,
             image_prompt=next_scene.image_prompt,
+            timeout_turns=next_scene.timeout_turns,  # Ensure this is included
+            success_metric=next_scene.success_metric,  # Ensure this is included
             created_at=next_scene.created_at,
             updated_at=next_scene.updated_at,
             personas=personas_data
@@ -933,7 +949,10 @@ async def get_scene_by_id(
             role=persona.role,
             background=persona.background,
             correlation=persona.correlation,
-            primary_goals=persona.primary_goals or [],
+            primary_goals=(
+                [persona.primary_goals] if isinstance(persona.primary_goals, str) and persona.primary_goals else
+                persona.primary_goals if isinstance(persona.primary_goals, list) else []
+            ),
             personality_traits=persona.personality_traits or {},
             created_at=persona.created_at,
             updated_at=persona.updated_at
@@ -950,6 +969,8 @@ async def get_scene_by_id(
         estimated_duration=scene.estimated_duration,
         image_url=scene.image_url,
         image_prompt=scene.image_prompt,
+        timeout_turns=scene.timeout_turns,  # Ensure this is included
+        success_metric=scene.success_metric,  # Ensure this is included
         created_at=scene.created_at,
         updated_at=scene.updated_at,
         personas=personas_data
@@ -1139,21 +1160,21 @@ Please type **"begin"** when you're ready to start, or **"help"** for more infor
 
 PERSONA BACKGROUND: {target_persona['identity']['bio']}
 
-CURRENT SCENE: Crisis Assessment Meeting - {orchestrator.scenario.get('scenes', [{}])[0].get('description', 'Team meeting to assess distribution challenges')}
+CURRENT SCENE: {orchestrator.scenario.get('scenes', [{}])[orchestrator.state.current_scene_index].get('title', '...')} - {orchestrator.scenario.get('scenes', [{}])[orchestrator.state.current_scene_index].get('description', '...')}
 
 SCENARIO CONTEXT: {orchestrator.scenario.get('description', '')}
 
 PERSONALITY: {target_persona.get('personality', {})}
 
-You are in a meeting about Kaskazi Network Ltd's distribution challenges in Kenya's micro retail market. Respond as {target_persona['identity']['name']} would, providing information and insights relevant to your role and the current distribution challenges. Be professional and provide specific insights about the distribution network, kiosks, or your role in the business.
+You are in a meeting about {orchestrator.scenario.get('title', '...')} to address the challenges of {orchestrator.scenario.get('challenge', '')}. Respond as {target_persona['identity']['name']} would, providing information and insights relevant to your role and the current challenges. Be professional and provide specific insights about the distribution network, kiosks, or your role in the business.
 
-IMPORTANT: This is about Kaskazi Network Ltd and distribution challenges in Kenya, NOT about HS Holdings or system outages.
+This is about {orchestrator.scenario.get('title', '...')} and its challenges, NOT about any other company or system.
 
 User's message: {request.message}"""
                         persona_name = target_persona['identity']['name']
                     else:
                         # Fallback to orchestrator
-                        system_prompt = f"""You are the ChatOrchestrator managing a business simulation. The user tried to mention @{persona_id} but that persona wasn't found. 
+                        system_prompt = f"""You are the ChatOrchestrator managing a business simulation about {orchestrator.scenario.get('title', '...')}.
 
 Available personas: {', '.join([p['id'] for p in orchestrator.scenario.get('personas', [])])}
 
@@ -1162,17 +1183,17 @@ Gently redirect them to use a valid persona mention or provide general guidance.
                         persona_id = None
                 else:
                     # General orchestrator response
-                    system_prompt = f"""You are the ChatOrchestrator for a business simulation about {orchestrator.scenario.get('title', 'team management')}.
+                    system_prompt = f"""You are the ChatOrchestrator for a business simulation about {orchestrator.scenario.get('title', '...')}.
 
-CURRENT SCENE: Crisis Assessment Meeting
-OBJECTIVE: Understand the current distribution challenges and identify key obstacles
+CURRENT SCENE: {orchestrator.scenario.get('scenes', [{}])[orchestrator.state.current_scene_index].get('title', '...')}
+OBJECTIVE: {orchestrator.scenario.get('scenes', [{}])[orchestrator.state.current_scene_index].get('objectives', ['...'])[0]}
 
 The user can:
-- Use @mentions to talk to specific team members (e.g., @ng'ang'a_wanjohi, @hussein_bakari, @george, @david)
+- Use @mentions to talk to specific team members (e.g., {', '.join([p['id'] for p in orchestrator.scenario.get('personas', [])])})
 - Ask general questions about the situation
 - Request help or guidance
 
-IMPORTANT: This is about Kaskazi Network Ltd and distribution challenges in Kenya's micro retail market, NOT about HS Holdings or system outages.
+This is about {orchestrator.scenario.get('title', '...')} and its challenges, NOT about any other company or system.
 
 Respond helpfully and guide them toward productive interactions with the team members. If they ask about previous conversations, remind them that you can only see the current message and suggest they ask the specific person again.
 
@@ -1282,7 +1303,7 @@ User's message: {request.message}"""
                     if validation_result.get("simulation_complete"):
                         ai_response += "\n\n🎉 **Congratulations! You have completed the entire simulation.**"
                     elif validation_result.get("next_scene_title"):
-                        ai_response += f"\n\n🎉 **Scene Completed!** Moving to next scene:\n\n**{validation_result['next_scene_title']}**\n\n**Objective:** Continue working with the team to address the distribution challenges."
+                        ai_response += f"\n\n🎉 **Scene Completed!** Moving to next scene:\n\n**{validation_result['next_scene_title']}**\n\n**Objective:** Continue working with the team to address the challenges of {orchestrator.scenario.get('title', '...')}."
                     
                     # Update orchestrator state to match database
                     if next_scene_id:

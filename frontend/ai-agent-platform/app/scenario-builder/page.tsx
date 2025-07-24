@@ -31,6 +31,62 @@ function Modal({ isOpen, onClose, children }: { isOpen: boolean; onClose: () => 
  if (!isOpen) return null;
  return (
    <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900 bg-opacity-60">
+     <div className="bg-white rounded-lg shadow-lg w-[760px] h-[80vh] flex flex-col relative p-0 resize-none">
+       <button
+         className="absolute top-4 right-4 text-gray-400 text-2xl font-bold hover:text-gray-600 z-10"
+         onClick={onClose}
+         aria-label="Close edit window"
+       >
+         &times;
+       </button>
+       {children}
+     </div>
+   </div>
+ );
+}
+
+function PersonaModal({ isOpen, onClose, children }: { isOpen: boolean; onClose: () => void; children: React.ReactNode }) {
+ React.useEffect(() => {
+   if (isOpen) {
+     document.body.classList.add('overflow-hidden');
+   } else {
+     document.body.classList.remove('overflow-hidden');
+   }
+   return () => {
+     document.body.classList.remove('overflow-hidden');
+   };
+ }, [isOpen]);
+ if (!isOpen) return null;
+ return (
+   <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900 bg-opacity-60">
+     <div className="bg-white rounded-lg shadow-lg w-[760px] h-[80vh] flex flex-col relative p-0 resize-none">
+       <button
+         className="absolute top-4 right-4 text-gray-400 text-2xl font-bold hover:text-gray-600 z-10"
+         onClick={onClose}
+         aria-label="Close edit window"
+       >
+         &times;
+       </button>
+       {children}
+     </div>
+   </div>
+ );
+}
+
+function SceneModal({ isOpen, onClose, children }: { isOpen: boolean; onClose: () => void; children: React.ReactNode }) {
+ React.useEffect(() => {
+   if (isOpen) {
+     document.body.classList.add('overflow-hidden');
+   } else {
+     document.body.classList.remove('overflow-hidden');
+   }
+   return () => {
+     document.body.classList.remove('overflow-hidden');
+   };
+ }, [isOpen]);
+ if (!isOpen) return null;
+ return (
+   <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900 bg-opacity-60">
      <div className="bg-white rounded-lg shadow-lg w-[1000px] h-[80vh] flex flex-col relative p-0 resize-none">
        <button
          className="absolute top-4 right-4 text-gray-400 text-2xl font-bold hover:text-gray-600 z-10"
@@ -85,13 +141,30 @@ export default function ScenarioBuilder() {
      return null;
    }
 
+   // Build payload using only the latest user-edited state
+   const payload = {
+     // Only copy non-scene/persona fields from autofillResult
+     title: name || autofillResult.title,
+     description: description || autofillResult.description,
+     learning_outcomes: learningOutcomes || autofillResult.learning_outcomes,
+     student_role: autofillResult.student_role,
+     key_figures: autofillResult.key_figures,
+     // Use the latest scenes and personas state
+     scenes: normalizeScenes(scenes),
+     personas,
+   };
+
+   // Debug log to check scenes state before saving
+   console.log("Scenes state before save:", scenes);
+   console.log("Personas state before save:", personas);
+
    setIsSaving(true);
    try {
      console.log("[DEBUG] Sending to save endpoint:", {
-       keys: Object.keys(autofillResult),
-       title: autofillResult.title,
-       key_figures_count: autofillResult.key_figures?.length || 0,
-       scenes_count: autofillResult.scenes?.length || 0
+       keys: Object.keys(payload),
+       title: payload.title,
+       key_figures_count: payload.key_figures?.length || 0,
+       scenes_count: payload.scenes?.length || 0
      });
      
      const response = await fetch(buildApiUrl("/api/scenarios/save"), {
@@ -99,7 +172,7 @@ export default function ScenarioBuilder() {
        headers: {
          "Content-Type": "application/json",
        },
-       body: JSON.stringify(autofillResult),
+       body: JSON.stringify(payload),
      });
 
      if (response.ok) {
@@ -199,18 +272,9 @@ export default function ScenarioBuilder() {
 
    let scenarioId = savedScenarioId;
    
-   // If not saved yet, save first
+   // Only allow play if scenario is already saved
    if (!scenarioId) {
-     try {
-       scenarioId = await handleSave();
-     } catch (error) {
-       alert("Failed to save scenario before playing. Please try again.");
-       return;
-     }
-   }
-
-   if (!scenarioId) {
-     alert("Failed to get scenario ID. Please save the scenario first and try again.");
+     alert("Please save the scenario before playing.");
      return;
    }
 
@@ -330,7 +394,8 @@ export default function ScenarioBuilder() {
      personas_involved: [],
      user_goal: "",
      sequence_order: scenes.length + 1,
-     image_url: ""
+     image_url: "",
+     timeout_turns: 15
    };
    setScenes(scenes => [...scenes, newScene]);
    setEditingSceneIdx(scenes.length); // Open the new scene for editing
@@ -591,7 +656,8 @@ export default function ScenarioBuilder() {
                user_goal: scene.user_goal || '',
                sequence_order: scene.sequence_order || index + 1,
                image_url: scene.image_url || '',
-               successMetric: scene.successMetric || ''
+               successMetric: scene.successMetric || '',
+               timeout_turns: scene.timeout_turns !== undefined && scene.timeout_turns !== null ? scene.timeout_turns : 15
              };
            });
          
@@ -626,6 +692,18 @@ export default function ScenarioBuilder() {
      setAutofillProgress(0);
    }
  };
+
+
+ // Utility to normalize scenes
+ function normalizeScenes(scenes: any[]) {
+   return scenes.map(scene => ({
+     ...scene,
+     timeout_turns:
+       scene.timeout_turns !== undefined && scene.timeout_turns !== null
+         ? scene.timeout_turns
+         : 15,
+   }));
+ }
 
 
  // Helper to extract likely player name from the title
@@ -825,7 +903,13 @@ export default function ScenarioBuilder() {
 
  // Scene management handlers
  const handleSaveScene = (idx: number, updatedScene: any) => {
-   setScenes(scenes => scenes.map((s, i) => i === idx ? { ...updatedScene } : s));
+   setScenes(scenes => scenes.map((s, i) => {
+     if (i === idx) {
+       // Merge the updated scene, preserving all new fields (like timeout_turns)
+       return { ...s, ...updatedScene };
+     }
+     return s;
+   }));
    setEditingSceneIdx(null);
  };
 
@@ -1203,7 +1287,7 @@ export default function ScenarioBuilder() {
      </div>
      {/* Modal for editing persona */}
      {editingIdx !== null && (
-       <Modal isOpen={true} onClose={() => setEditingIdx(null)}>
+       <PersonaModal isOpen={true} onClose={() => setEditingIdx(null)}>
          <PersonaCard
            persona={{ 
              ...(editingIdx < tempPersonas.length ? tempPersonas[editingIdx] : personas[editingIdx - tempPersonas.length]), 
@@ -1215,12 +1299,12 @@ export default function ScenarioBuilder() {
            onDelete={() => handleDeletePersona(editingIdx)}
            editMode={true}
          />
-       </Modal>
+       </PersonaModal>
      )}
      
      {/* Modal for editing scene */}
      {editingSceneIdx !== null && (
-       <Modal isOpen={true} onClose={() => setEditingSceneIdx(null)}>
+       <SceneModal isOpen={true} onClose={() => setEditingSceneIdx(null)}>
          <SceneCard
            scene={scenes[editingSceneIdx]}
            onSave={updatedScene => handleSaveScene(editingSceneIdx, updatedScene)}
@@ -1229,7 +1313,7 @@ export default function ScenarioBuilder() {
            allPersonas={[...personas, ...tempPersonas]}
            studentRole={autofillResult?.student_role || ""}
          />
-       </Modal>
+       </SceneModal>
      )}
    </div>
  )
