@@ -109,6 +109,7 @@ class ScenarioSceneResponse(BaseModel):
     # New fields
     timeout_turns: Optional[int] = None
     success_metric: Optional[str] = None
+    personas_involved: Optional[List[str]] = None  # Add personas_involved field
     created_at: datetime
     updated_at: datetime
     personas: Optional[List[ScenarioPersonaResponse]] = None
@@ -426,6 +427,7 @@ class SimulationChatResponse(BaseModel):
     scene_id: Optional[int] = None
     scene_completed: Optional[bool] = None
     next_scene_id: Optional[int] = None
+    next_scene: Optional[Dict[str, Any]] = None  # Full next scene object for frontend
     persona_id: Optional[str] = None  # Persona ID for @mentions
     
     class Config:

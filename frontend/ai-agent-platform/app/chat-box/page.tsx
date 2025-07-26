@@ -54,6 +54,7 @@ interface Scene {
   estimated_duration?: number
   image_url?: string
   personas: Persona[]
+  personas_involved?: string[] // Add this to track which personas are actually involved
   timeout_turns?: number // Add this line
 }
 
@@ -75,6 +76,8 @@ interface Message {
   scene_completed?: boolean  // Add scene completion flag
   next_scene_id?: number  // Add next scene ID for progression
   showSubmitForGrading?: boolean // Add this for the new system message
+  showViewGrading?: boolean // Add this for completion messages
+  gradingInProgress?: boolean // Add this for loading bar
 }
 
 // Scenario Selection Component
@@ -254,6 +257,7 @@ const SceneProgress = ({
   completedScenes: number[]
 }) => {
   const progress = (completedScenes.length / totalScenes) * 100
+  console.log("[DEBUG] SceneProgress - currentScene:", currentScene, "totalScenes:", totalScenes, "completedScenes:", completedScenes, "progress:", progress)
 
   return (
     <Card className="mb-4">
@@ -296,7 +300,11 @@ const CurrentSceneInfo = ({ scene, turnCount }: { scene: Scene, turnCount: numbe
               className="w-full h-32 object-cover rounded-lg border"
               onError={(e) => {
                 const target = e.target as HTMLImageElement;
+                console.log("[DEBUG] Image failed to load:", scene.image_url);
                 target.style.display = 'none';
+              }}
+              onLoad={() => {
+                console.log("[DEBUG] Image loaded successfully:", scene.image_url);
               }}
             />
           </div>
@@ -319,6 +327,7 @@ const CurrentSceneInfo = ({ scene, turnCount }: { scene: Scene, turnCount: numbe
           </p>
         </div>
         
+        {/* Only use scene.personas for available personas */}
         {scene.personas && scene.personas.length > 0 && (
           <div>
             <p className="text-xs font-medium text-gray-700 mb-2">Available Personas:</p>
@@ -381,6 +390,11 @@ export default function LinearSimulationChat() {
   // Add state for submit button
   const [canSubmitForGrading, setCanSubmitForGrading] = useState(false);
   const [hasSubmittedForGrading, setHasSubmittedForGrading] = useState(false);
+  // Add state to track if grading has been shown
+  const [gradingHasBeenShown, setGradingHasBeenShown] = useState(false);
+  const [simulationComplete, setSimulationComplete] = useState(false);
+  // Add gradingInProgress state
+  const [gradingInProgress, setGradingInProgress] = useState(false);
   // Helper to add a scene to allScenes if not already present
   const addSceneIfMissing = (scene: Scene) => {
     setAllScenes(prev => {
@@ -392,6 +406,27 @@ export default function LinearSimulationChat() {
       return prev;
     });
   };
+  
+  // Helper to generate scene introduction text
+  const generateSceneIntroduction = (scene: Scene) => {
+    // Filter personas to only show involved ones
+    const involvedPersonas = scene.personas_involved && scene.personas_involved.length > 0
+      ? scene.personas.filter(persona => 
+          scene.personas_involved!.includes(persona.name)
+        )
+      : scene.personas; // Fallback to all personas if personas_involved is not available
+    
+    return `**Scene ${scene.scene_order} — ${scene.title}**
+
+*${scene.description}*
+
+**Objective:** ${scene.user_goal || 'Complete the interaction'}
+
+**Active Participants:**
+${involvedPersonas.map(persona => `• @${persona.name.toLowerCase().replace(/\s+/g, '_')}: ${persona.name} (${persona.role})`).join('\n')}
+
+*You have ${scene.timeout_turns || 15} turns to achieve the objective.*`;
+  };
   const messagesEndRef = useRef<HTMLDivElement>(null)
   // Auto-scroll to bottom
   useEffect(() => {
@@ -402,6 +437,9 @@ export default function LinearSimulationChat() {
   const startSimulation = async (scenarioId: number) => {
     setSelectedScenarioId(scenarioId)
     setIsLoading(true)
+    setSimulationComplete(false)
+    setCanSubmitForGrading(false) // Reset submit button state
+    setHasSubmittedForGrading(false)
     
     try {
       const response = await fetch(buildApiUrl("/api/simulation/start"), {
@@ -437,7 +475,7 @@ export default function LinearSimulationChat() {
         setAllScenes([data.current_scene]);
         console.log("[DEBUG] allScenes fallback to current_scene (fetch error):", [data.current_scene]);
       }
-
+      
       // Add welcome message
       setMessages([{
         id: Date.now(),
@@ -459,10 +497,31 @@ export default function LinearSimulationChat() {
 
   // Send message to orchestrator
   const sendMessage = async () => {
+    console.log("[DEBUG] sendMessage called. Input:", input);
     if (inputBlocked) return;
     if (!simulationData || !input.trim() || isLoading) return;
 
-    const trimmedInput = input.trim().toLowerCase();
+    // Restrict @mentions to only personas in the current scene
+    const trimmedInput = input.trim();
+    const mentionMatch = trimmedInput.match(/@(\w+)/);
+    if (mentionMatch) {
+      const mentionId = mentionMatch[1].toLowerCase();
+      // Use only the personas from the current scene for validation
+      const validPersonaMentions = simulationData.current_scene.personas.map(
+        p => p.name.toLowerCase().replace(/\s+/g, '_')
+      );
+      console.log("[DEBUG] @mention validation:");
+      console.log("  - Mentioned ID:", mentionId);
+      console.log("  - Valid persona mentions:", validPersonaMentions);
+      console.log("  - Current scene personas:", simulationData.current_scene.personas.map(p => p.name));
+      if (!validPersonaMentions.includes(mentionId)) {
+        console.log("[DEBUG] Invalid mention detected - blocking message");
+        alert('You can only @mention personas involved in this scene.');
+        return;
+      }
+      console.log("[DEBUG] Valid mention - allowing message");
+    }
+
     const userMessage: Message = {
       id: Date.now(),
       sender: "You",
@@ -493,7 +552,8 @@ export default function LinearSimulationChat() {
           scenario_id: simulationData.scenario.id,
           user_id: 1,
           scene_id: simulationData.current_scene.id,
-          message: userMessage.text
+          message: userMessage.text,
+          user_progress_id: simulationData.user_progress_id
         })
       });
 
@@ -521,10 +581,27 @@ export default function LinearSimulationChat() {
         }
         setMessages(prev => [...prev, aiMessage])
         
-        // Allow submit for grading after AI response is received
-        if (trimmedInput !== 'begin' && trimmedInput !== 'help') {
-          setCanSubmitForGrading(true);
+        // If this is the first "begin" response, add scene introduction as separate message
+        if (trimmedInput === 'begin') {
+          // Use the scene from allScenes (by ID) for correct persona filtering
+          const currentScene = allScenes.find(
+            s => s.id === simulationData.current_scene.id
+          ) || simulationData.current_scene;
+          console.log('[DEBUG] Using scene for introduction:', currentScene);
+          const sceneIntro = generateSceneIntroduction(currentScene);
+          const sceneMessage: Message = {
+            id: Date.now() + 2,
+            sender: "System",
+            text: sceneIntro,
+            timestamp: new Date(),
+            type: 'system'
+          }
+          setMessages(prev => [...prev, sceneMessage])
         }
+        
+        // Allow submit for grading after ANY AI response is received
+        console.log("[DEBUG] Setting canSubmitForGrading to true after AI response");
+        setCanSubmitForGrading(true);
 
         // Handle scene progression if indicated
         if (typeof chatData.turn_count === 'number') {
@@ -556,18 +633,21 @@ export default function LinearSimulationChat() {
                 throw new Error('Failed to fetch next scene');
               })
               .then(nextSceneData => {
+                // Use the filtered scene from allScenes if available
+                const filteredNextScene = allScenes.find(s => s.id === nextSceneData.id) || nextSceneData;
                 setSimulationData(prev => prev ? {
                   ...prev,
-                  current_scene: nextSceneData
+                  current_scene: filteredNextScene
                 } : null);
                 setTurnCount(0);
                 setInputBlocked(false);
-                addSceneIfMissing(nextSceneData);
+                setCanSubmitForGrading(true); // Enable submit button after scene transition
+                addSceneIfMissing(filteredNextScene);
                 // Add scene transition message
                 const transitionMessage: Message = {
                   id: Date.now() + 2,
                   sender: "System",
-                  text: `🎉 **Scene Completed!** Moving to Scene ${nextSceneData.scene_order}:\n\n**${nextSceneData.title}**\n${nextSceneData.description}\n\n**Objective:** ${nextSceneData.user_goal || 'Complete the scene'}`,
+                  text: generateSceneIntroduction(filteredNextScene),
                   timestamp: new Date(),
                   type: 'system'
                 };
@@ -600,7 +680,9 @@ export default function LinearSimulationChat() {
                 type: 'system'
               }
             ]);
-            fetchGradingData();
+            setGradingInProgress(true);
+            setSimulationComplete(true); // Set simulation complete when grading starts
+            fetchGradingData().then(() => setGradingInProgress(false));
             return;
           }
           // If not last scene and no next_scene_id, fallback
@@ -733,9 +815,34 @@ export default function LinearSimulationChat() {
             )}
           </div>
         ))}
-        <div className="flex justify-center mt-6">
-          <button className="btn btn-primary" onClick={() => setShowGrading(false)}>Close</button>
-        </div>
+                    <div className="flex justify-center mt-6">
+              <button className="btn btn-primary" onClick={() => {
+                console.log("[DEBUG] Closing grading modal");
+                setShowGrading(false);
+                setGradingHasBeenShown(true);
+                setInputBlocked(false);
+                setCanSubmitForGrading(false);
+                setHasSubmittedForGrading(false);
+                
+                // Update the completion message to show the "View Grading" button
+                setMessages(prev => {
+                  console.log("[DEBUG] Current messages before update:", prev);
+                  console.log("[DEBUG] Looking for completion message with text containing '🎉 Simulation complete!'");
+                  const updatedMessages = prev.map(msg => {
+                    console.log("[DEBUG] Checking message:", msg.text.substring(0, 50), "showViewGrading:", msg.showViewGrading, "type:", msg.type);
+                    if (msg.text.includes("🎉 Simulation complete!") && msg.type === 'system') {
+                      console.log("[DEBUG] FOUND COMPLETION MESSAGE! Updating showViewGrading to true");
+                      const updatedMsg = { ...msg, showViewGrading: true };
+                      console.log("[DEBUG] Updated message:", updatedMsg);
+                      return updatedMsg;
+                    }
+                    return msg;
+                  });
+                  console.log("[DEBUG] Final updated messages:", updatedMessages);
+                  return updatedMessages;
+                });
+              }}>Close</button>
+            </div>
       </div>
     </div>
   )}
@@ -743,67 +850,164 @@ export default function LinearSimulationChat() {
   // Handler for submit button
   const handleSubmitForGrading = async () => {
     console.log("[DEBUG] handleSubmitForGrading called");
+    console.log("[DEBUG] Current state before submit:");
+    console.log("  - canSubmitForGrading:", canSubmitForGrading);
+    console.log("  - hasSubmittedForGrading:", hasSubmittedForGrading);
+    console.log("  - inputBlocked:", inputBlocked);
+    console.log("  - simulationComplete:", simulationComplete);
     setHasSubmittedForGrading(true);
     setInputBlocked(true);
-    // Call backend to progress the scene
-    const res = await fetch(buildApiUrl(`/api/simulation/progress`), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        user_progress_id: simulationData.user_progress_id,
-        current_scene_id: simulationData.current_scene.id,
-        goal_achieved: true, // or use actual validation if needed
-        forced_progression: false
-      })
-    });
-    console.log("[DEBUG] /progress response status:", res.status);
-    if (res.ok) {
-      const data = await res.json();
-      console.log("[DEBUG] /progress response data:", data);
-      if (data.simulation_complete) {
-        console.log("[DEBUG] Simulation complete, showing grading");
-        // Show grading modal
-        await fetchGradingData();
-      } else if (data.next_scene) {
-        console.log("[DEBUG] Moving to next scene:", data.next_scene);
-        // Move to next scene
-        setSimulationData(prev => prev ? {
-          ...prev,
-          current_scene: data.next_scene
-        } : null);
-        setTurnCount(0);
-        setInputBlocked(false);
-        setCanSubmitForGrading(false);
-        setHasSubmittedForGrading(false);
-        // Optionally, add a system message for scene transition
-        setMessages(prev => [
-          ...prev,
-          {
-            id: Date.now() + 2,
-            sender: "System",
-            text: `🎉 Scene completed! Moving to Scene ${data.next_scene.scene_order}:\n\n**${data.next_scene.title}**\n${data.next_scene.description}\n\n**Objective:** ${data.next_scene.user_goal || 'Complete the scene'}`,
-            timestamp: new Date(),
-            type: 'system'
-          }
-        ]);
+    
+    // Don't add submit message to chat history - it's a UI action, not a conversation message
+    
+    // Instead of calling /progress directly, send a special message through the normal chat flow
+    // This ensures the turn counting logic is respected
+    const specialMessage = "SUBMIT_FOR_GRADING";
+    
+    try {
+      const response = await fetch(buildApiUrl("/api/simulation/linear-chat"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_progress_id: simulationData.user_progress_id,
+          scene_id: simulationData.current_scene.id,
+          message: specialMessage,
+          user_id: 1,
+          scenario_id: simulationData.scenario.id
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log("[DEBUG] Submit for grading response:", data);
+      console.log("[DEBUG] scene_completed:", data.scene_completed);
+      console.log("[DEBUG] next_scene_id:", data.next_scene_id);
+      
+      if (data.scene_completed) {
+        if (data.next_scene_id) {
+          console.log("[DEBUG] Moving to next scene via chat flow");
+          // Update completed scenes
+          setCompletedScenes(prev => {
+            const currentSceneId = simulationData.current_scene.id;
+            if (!prev.includes(currentSceneId)) {
+              return [...prev, currentSceneId];
+            }
+            return prev;
+          });
+          
+          // Move to next scene
+          // Use the filtered scene from allScenes if available
+          const filteredNextScene = allScenes.find(s => s.id === data.next_scene.id) || data.next_scene;
+          setSimulationData(prev => prev ? {
+            ...prev,
+            current_scene: filteredNextScene
+          } : null);
+          setTurnCount(0);
+          setCanSubmitForGrading(true); // Enable submit button immediately for new scene
+          setHasSubmittedForGrading(false);
+          addSceneIfMissing(filteredNextScene);
+          setMessages(prev => [
+            ...prev,
+            {
+              id: Date.now() + 2,
+              sender: "System",
+              text: generateSceneIntroduction(filteredNextScene),
+              timestamp: new Date(),
+              type: 'system'
+            }
+          ]);
+          // Confirm backend state before unblocking input
+          fetch(buildApiUrl(`/api/simulation/progress/${simulationData.user_progress_id}`))
+            .then(res => res.json())
+            .then(progress => {
+              if (progress.current_scene_id === data.next_scene.id) {
+                console.log("[DEBUG] Backend state synced, enabling submit button");
+                setInputBlocked(false);
+                // Enable submit button after scene transition is complete
+                setCanSubmitForGrading(true);
+              } else {
+                // Retry after a short delay if not yet synced
+                setTimeout(() => {
+                  setInputBlocked(false);
+                  setCanSubmitForGrading(true);
+                }, 300);
+              }
+            })
+            .catch(() => {
+              setTimeout(() => {
+                setInputBlocked(false);
+                setCanSubmitForGrading(true);
+              }, 300);
+            });
+        } else {
+          console.log("[DEBUG] Simulation complete via chat flow");
+          setSimulationComplete(true);
+          // Update completed scenes
+          setCompletedScenes(prev => {
+            const currentSceneId = simulationData.current_scene.id;
+            if (!prev.includes(currentSceneId)) {
+              return [...prev, currentSceneId];
+            }
+            return prev;
+          });
+          
+          // Add completion message to chat
+          setMessages(prev => [
+            ...prev,
+            {
+              id: Date.now() + 3,
+              sender: "System",
+              text: "🎉 Simulation complete! You have finished all scenes. View your grading and feedback.",
+              timestamp: new Date(),
+              type: 'system',
+              showViewGrading: false
+            }
+          ]);
+          
+          // Show grading modal
+          setGradingInProgress(true);
+          setSimulationComplete(true); // Set simulation complete when grading starts
+          fetchGradingData().then(() => setGradingInProgress(false));
+        }
       } else {
-        console.log("[DEBUG] No next_scene and not simulation_complete - unexpected response");
+        console.log("[DEBUG] Scene not completed, continuing normally");
         setInputBlocked(false);
         setCanSubmitForGrading(false);
         setHasSubmittedForGrading(false);
       }
-    } else {
-      console.log("[DEBUG] /progress request failed");
-      // Fallback: just block input and show error
+    } catch (error) {
+      console.error("[ERROR] Submit for grading failed:", error);
       setInputBlocked(false);
       setCanSubmitForGrading(false);
       setHasSubmittedForGrading(false);
-      alert('Failed to progress scene.');
+      alert('Failed to submit for grading.');
     }
   };
 
   // Helper to determine if we should show the submit button system message
-  const shouldShowSubmitSystemMessage = canSubmitForGrading && !hasSubmittedForGrading && !inputBlocked;
+  const isLastScene = simulationData && simulationData.current_scene.scene_order >= totalScenes;
+  const timeoutTurns = simulationData?.current_scene?.timeout_turns ?? 15;
+  const hasTurnsRemaining = turnCount < timeoutTurns;
+  const shouldShowSubmitSystemMessage = canSubmitForGrading && !hasSubmittedForGrading && !inputBlocked && !simulationComplete && hasTurnsRemaining;
+  
+  // Debug logging for personas
+  console.log("[DEBUG] Current scene personas:", simulationData?.current_scene?.personas);
+  console.log("[DEBUG] Current scene order:", simulationData?.current_scene?.scene_order);
+  console.log("[DEBUG] Total scenes:", totalScenes);
+  console.log("[DEBUG] Is last scene:", isLastScene);
+  console.log("[DEBUG] Should show submit button:", shouldShowSubmitSystemMessage);
+  
+  // Debug logging for submit button conditions
+  console.log("[DEBUG] Submit button conditions:");
+  console.log("  - canSubmitForGrading:", canSubmitForGrading);
+  console.log("  - hasSubmittedForGrading:", hasSubmittedForGrading);
+  console.log("  - inputBlocked:", inputBlocked);
+  console.log("  - simulationComplete:", simulationComplete);
+  console.log("  - isLastScene:", isLastScene);
+  console.log("  - shouldShowSubmitSystemMessage:", shouldShowSubmitSystemMessage);
 
   return (
     <div className="min-h-screen bg-gray-50 p-4">
@@ -853,13 +1057,24 @@ export default function LinearSimulationChat() {
             {/* Messages Area */}
             <CardContent className="flex-1 overflow-y-auto p-4 space-y-4">
               {/* Render messages, including the new system message if needed */}
-              {[...messages, ...(shouldShowSubmitSystemMessage ? [{
-                id: 'submit-for-grading',
-                sender: 'System',
-                text: '',
-                type: 'system',
-                showSubmitForGrading: true
-              }] : [])].map((message, idx) => (
+              {[...messages,
+                ...(gradingInProgress ? [{
+                  id: 'grading-in-progress',
+                  sender: 'System',
+                  text: 'Grading in progress... ',
+                  type: 'system',
+                  showSubmitForGrading: false,
+                  showViewGrading: false,
+                  gradingInProgress: true
+                }] : []),
+                ...(shouldShowSubmitSystemMessage ? [{
+                  id: 'submit-for-grading',
+                  sender: 'System',
+                  text: '',
+                  type: 'system',
+                  showSubmitForGrading: true,
+                  showViewGrading: false
+                }] : [])].map((message, idx) => (
                 <div
                   key={message.id}
                   className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -909,8 +1124,32 @@ export default function LinearSimulationChat() {
                           >
                             Submit for Grading
                           </Button>
+                    </div>
+                      )}
+                      {message.showViewGrading && (
+                        <div className="flex flex-col items-center">
+                          <Button
+                            variant="default"
+                            onClick={() => {
+                              if (gradingData) {
+                                setShowGrading(true);
+                              } else {
+                                setGradingInProgress(true);
+                                fetchGradingData().then(() => setGradingInProgress(false));
+                              }
+                            }}
+                            className="mt-2"
+                          >
+                            View Grading & Feedback
+                          </Button>
                         </div>
                       )}
+                      {message.gradingInProgress && (
+                        <div className="w-full mt-2 h-2 bg-gray-200 rounded-full overflow-hidden">
+                          <div className="h-2 bg-blue-400 animate-pulse w-3/4 transition-all duration-1000" style={{ width: '75%' }}></div>
+                        </div>
+                      )}
+
                     </div>
                   </div>
                 </div>
@@ -932,7 +1171,7 @@ export default function LinearSimulationChat() {
                     onChange={(e) => setInput(e.target.value)}
                     onKeyPress={handleKeyPress}
                     placeholder="Type your message or command..."
-                    disabled={inputBlocked || isLoading || isTyping}
+                    disabled={inputBlocked || isLoading || isTyping || simulationComplete || gradingInProgress}
                     className="flex-1"
                   />
                   <Button
@@ -965,7 +1204,7 @@ export default function LinearSimulationChat() {
                   >
                     Help
                   </Button>
-                  {simulationData.current_scene.personas && simulationData.current_scene.personas.length > 0 && (
+                  {simulationData.current_scene.personas && simulationData.current_scene.personas.length > 0 && simulationData.current_scene.personas[0]?.name && (
                     <Button
                       size="sm"
                       variant="outline"
@@ -976,7 +1215,7 @@ export default function LinearSimulationChat() {
                       }}
                       disabled={inputBlocked || isLoading || isTyping}
                     >
-                      @{simulationData.current_scene.personas[0].name.split(' ')[0]}
+                      @{simulationData.current_scene.personas[0]?.name?.split(' ')[0] || 'Persona'}
                     </Button>
                   )}
                 </div>
@@ -1032,7 +1271,37 @@ export default function LinearSimulationChat() {
               </div>
             ))}
             <div className="flex justify-center mt-6">
-              <button className="btn btn-primary" onClick={() => setShowGrading(false)}>Close</button>
+              <button 
+                className="btn btn-primary" 
+                onClick={() => {
+                  console.log("[DEBUG] Closing grading modal");
+                  setShowGrading(false);
+                  setGradingHasBeenShown(true);
+                  setInputBlocked(false);
+                  setCanSubmitForGrading(false);
+                  setHasSubmittedForGrading(false);
+                  
+                  // Update the completion message to show the "View Grading" button
+                  setMessages(prev => {
+                    console.log("[DEBUG] Current messages before update:", prev);
+                    console.log("[DEBUG] Looking for completion message with text containing '🎉 Simulation complete!'");
+                    const updatedMessages = prev.map(msg => {
+                      console.log("[DEBUG] Checking message:", msg.text.substring(0, 50), "showViewGrading:", msg.showViewGrading, "type:", msg.type);
+                      if (msg.text.includes("🎉 Simulation complete!") && msg.type === 'system') {
+                        console.log("[DEBUG] FOUND COMPLETION MESSAGE! Updating showViewGrading to true");
+                        const updatedMsg = { ...msg, showViewGrading: true };
+                        console.log("[DEBUG] Updated message:", updatedMsg);
+                        return updatedMsg;
+                      }
+                      return msg;
+                    });
+                    console.log("[DEBUG] Final updated messages:", updatedMessages);
+                    return updatedMessages;
+                  });
+                }}
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>
