@@ -1,7 +1,10 @@
 # Copy this to .env and fill in your values
 
-# Database Configuration - Replace with your actual database URL
-DATABASE_URL=postgresql://username:password@hostname:5432/database_name?sslmode=require
+# Database Configuration - PostgreSQL (primary database)
+# For development: postgresql://username:password@localhost:5432/ai_agent_platform
+# For production: postgresql://username:password@hostname:5432/ai_agent_platform?sslmode=require
+# For SQLite (development only): sqlite:///./ai_agent_platform.db
+DATABASE_URL=postgresql://username:password@localhost:5432/ai_agent_platform
 
 # AI Service API Keys - Replace with your actual API keys
 OPENAI_API_KEY=sEPLACE_WITH_YOUR_OPENAI_API_KEY_HERE
