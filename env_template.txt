@@ -20,4 +20,10 @@ SECRET_KEY=your_super_secret_key_here_change_in_production
 ENVIRONMENT=development
 
 # CORS Origins (comma-separated) - Add your frontend URLs
-CORS_ORIGINS=http://localhost:3000,http://localhost:5173 
+CORS_ORIGINS=http://localhost:3000,http://localhost:5173
+
+# Google OAuth Configuration
+# Get these from Google Cloud Console: https://console.cloud.google.com/
+GOOGLE_CLIENT_ID=your_google_client_id_here
+GOOGLE_CLIENT_SECRET=your_google_client_secret_here
+GOOGLE_REDIRECT_URI=http://localhost:8000/auth/google/callback 
