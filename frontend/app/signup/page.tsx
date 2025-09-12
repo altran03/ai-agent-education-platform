@@ -64,7 +64,7 @@ export default function SignupPage() {
         ...formData,
         username: username
       }
-      await register(registerData)
+      await register(registerData.email, registerData.password, registerData.full_name, registerData.username)
       router.push("/dashboard")
     } catch (error) {
       setError(error instanceof Error ? error.message : "Registration failed")

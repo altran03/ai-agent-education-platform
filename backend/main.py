@@ -175,9 +175,10 @@ async def get_scenarios(
         raise HTTPException(status_code=500, detail=f"Failed to fetch scenarios: {str(e)}")
 
 # --- USER AUTHENTICATION & MANAGEMENT ---
-@app.post("/users/register", response_model=UserResponse)
+@app.post("/users/register", response_model=UserLoginResponse)
 async def register_user(user: UserRegister, db: Session = Depends(get_db)):
     """Register a new user"""
+    print(f"[DEBUG] Registration attempt for email: {user.email}, username: {user.username}")
     # Check if user already exists
     existing_user = db.query(User).filter(
         (User.email == user.email) | (User.username == user.username)
@@ -206,7 +207,31 @@ async def register_user(user: UserRegister, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(db_user)
     
-    return db_user
+    # Create access token for the new user
+    access_token = create_access_token(data={"sub": str(db_user.id)})
+    
+    return UserLoginResponse(
+        access_token=access_token,
+        token_type="bearer",
+        user=UserResponse(
+            id=db_user.id,
+            email=db_user.email,
+            full_name=db_user.full_name,
+            username=db_user.username,
+            bio=db_user.bio,
+            avatar_url=db_user.avatar_url,
+            role=db_user.role,
+            published_scenarios=db_user.published_scenarios,
+            total_simulations=db_user.total_simulations,
+            reputation_score=db_user.reputation_score,
+            profile_public=db_user.profile_public,
+            allow_contact=db_user.allow_contact,
+            is_active=db_user.is_active,
+            is_verified=db_user.is_verified,
+            created_at=db_user.created_at,
+            updated_at=db_user.updated_at
+        )
+    )
 
 @app.post("/users/login", response_model=UserLoginResponse)
 async def login_user(user: UserLogin, db: Session = Depends(get_db)):
