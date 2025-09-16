@@ -13,7 +13,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 import os
 from database.connection import settings
-from services.few_shot_examples import few_shot_examples_service
+from services.chain_of_thought import chain_of_thought_service
 
 # LangChain imports (optional)
 try:
@@ -285,12 +285,12 @@ Respond with only a number between 0.0 and 1.0:"""
         personality_traits = persona_data.get('personality_traits', {})
         traits_text = ", ".join([f"{trait}: {score}/10" for trait, score in personality_traits.items()])
         
-        # Get role-specific examples
-        examples = few_shot_examples_service.get_adaptive_examples(persona_data, attempt_number)
+        # Get Chain of Thought reasoning prompt
+        cot_prompt = chain_of_thought_service.get_adaptive_cot_prompt(persona_data, attempt_number)
         
         context = f"""You are {persona_data['name']}, a {persona_data['role']} in this business simulation.
 
-{examples}
+{cot_prompt}
 
 PERSONA BACKGROUND:
 {persona_data.get('background', 'No background provided')}

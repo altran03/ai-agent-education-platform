@@ -17,7 +17,7 @@ from datetime import datetime
 from langchain_config import langchain_manager, settings
 from database.models import ScenarioPersona, ConversationLog
 from database.connection import get_db, SessionLocal
-from services.few_shot_examples import few_shot_examples_service
+from services.chain_of_thought import chain_of_thought_service
 
 class PersonaCallbackHandler(BaseCallbackHandler):
     """Callback handler for persona interactions"""
@@ -143,11 +143,11 @@ class PersonaAgent:
         ])
     
     def _get_system_prompt(self, attempt_number: int = 1) -> str:
-        """Generate system prompt for the persona with few-shot examples"""
+        """Generate system prompt for the persona with Chain of Thought reasoning"""
         personality_traits = self.persona.personality_traits or {}
         primary_goals = self.persona.primary_goals or []
         
-        # Create persona data for few-shot examples
+        # Create persona data for Chain of Thought prompting
         persona_data = {
             'name': self.persona.name,
             'role': self.persona.role,
@@ -155,12 +155,12 @@ class PersonaAgent:
             'primary_goals': primary_goals
         }
         
-        # Get role-specific examples
-        examples = few_shot_examples_service.get_adaptive_examples(persona_data, attempt_number)
+        # Get Chain of Thought reasoning prompt
+        cot_prompt = chain_of_thought_service.get_adaptive_cot_prompt(persona_data, attempt_number)
         
         return f"""You are {self.persona.name}, a {self.persona.role} in this business simulation.
 
-{examples}
+{cot_prompt}
 
 PERSONA BACKGROUND:
 {self.persona.background}

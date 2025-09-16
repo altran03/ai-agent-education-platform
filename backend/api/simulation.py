@@ -28,7 +28,7 @@ from database.schemas import (
     ScenarioResponse, ScenarioSceneResponse, ScenarioPersonaResponse
 )
 from .chat_orchestrator import ChatOrchestrator, SimulationState
-from services.few_shot_examples import few_shot_examples_service
+from services.chain_of_thought import chain_of_thought_service
 
 router = APIRouter(prefix="/api/simulation", tags=["Simulation"])
 
@@ -562,13 +562,13 @@ async def chat_with_persona(
         'primary_goals': target_persona.primary_goals or []
     }
     
-    # Get role-specific examples
-    examples = few_shot_examples_service.get_adaptive_examples(persona_data, current_attempt)
+    # Get Chain of Thought reasoning prompt
+    cot_prompt = chain_of_thought_service.get_adaptive_cot_prompt(persona_data, current_attempt)
     
     # Create AI prompt with persona and scene context
     system_prompt = f"""You are {target_persona.name}, a {target_persona.role} in this business simulation.
 
-{examples}
+{cot_prompt}
 
 PERSONA BACKGROUND:
 {target_persona.background}
@@ -1444,13 +1444,13 @@ You are about to enter a multi-scene simulation where you'll interact with vario
                         'primary_goals': target_persona.get('personality', {}).get('goals', [])
                     }
                     
-                    # Get role-specific examples
-                    examples = few_shot_examples_service.get_adaptive_examples(persona_data, orchestrator.state.turn_count)
+                    # Get Chain of Thought reasoning prompt
+                    cot_prompt = chain_of_thought_service.get_adaptive_cot_prompt(persona_data, orchestrator.state.turn_count)
                     
                     # Create a more focused system prompt for persona interaction
                     system_prompt = f"""You are {target_persona['identity']['name']}, a {target_persona['identity']['role']} in this business simulation.
 
-{examples}
+{cot_prompt}
 
 PERSONA BACKGROUND: {target_persona['identity']['bio']}
 
